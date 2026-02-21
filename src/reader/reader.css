@@ -1,0 +1,306 @@
+/* Reader View 样式 — 注入到 Shadow DOM 内 */
+
+/* ===== 基础变量 ===== */
+#reader-view-container {
+  --reader-font-size: 18px;
+  --reader-line-height: 1.8;
+  --reader-content-width: 700px;
+  --reader-font-family: Georgia, serif;
+}
+
+/* ===== 主题：亮色（默认） ===== */
+#reader-view-container,
+#reader-view-container[data-theme="light"] {
+  --reader-bg-color: #ffffff;
+  --reader-text-color: #1a1a1a;
+  --reader-meta-color: #666666;
+  --reader-border-color: #e0e0e0;
+  --reader-code-bg: #f5f5f5;
+  --reader-link-color: #1a73e8;
+  --reader-selection-bg: #b3d4fc;
+  --reader-selection-color: #000000;
+}
+
+/* ===== 主题：暗色 ===== */
+#reader-view-container[data-theme="dark"] {
+  --reader-bg-color: #1a1a1a;
+  --reader-text-color: #e0e0e0;
+  --reader-meta-color: #999999;
+  --reader-border-color: #333333;
+  --reader-code-bg: #252525;
+  --reader-link-color: #8ab4f8;
+  --reader-selection-bg: #3a5a8c;
+  --reader-selection-color: #ffffff;
+}
+
+/* ===== 主题：护眼 ===== */
+#reader-view-container[data-theme="sepia"] {
+  --reader-bg-color: #f4ecd8;
+  --reader-text-color: #5c4b37;
+  --reader-meta-color: #8b7355;
+  --reader-border-color: #d4c4a8;
+  --reader-code-bg: #ebe3d1;
+  --reader-link-color: #9b6e3c;
+  --reader-selection-bg: #c4b08a;
+  --reader-selection-color: #3a2e1f;
+}
+
+/* ===== 容器 ===== */
+#reader-view-container {
+  background-color: var(--reader-bg-color);
+  color: var(--reader-text-color);
+  font-size: var(--reader-font-size);
+  line-height: var(--reader-line-height);
+  font-family: var(--reader-font-family);
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+}
+
+#reader-view-container ::selection {
+  background: var(--reader-selection-bg);
+  color: var(--reader-selection-color);
+}
+
+/* ===== 工具栏 ===== */
+.reader-header {
+  position: sticky;
+  top: 0;
+  background: var(--reader-bg-color);
+  border-bottom: 1px solid var(--reader-border-color);
+  padding: 10px 20px;
+  z-index: 10;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: var(--reader-content-width);
+  margin: 0 auto;
+}
+
+.toolbar-btn {
+  background: none;
+  border: 1px solid var(--reader-border-color);
+  color: var(--reader-text-color);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.toolbar-btn:hover {
+  background: var(--reader-border-color);
+}
+
+.toolbar-select {
+  background: var(--reader-bg-color);
+  border: 1px solid var(--reader-border-color);
+  color: var(--reader-text-color);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.toolbar-label {
+  color: var(--reader-meta-color);
+  font-size: 13px;
+  min-width: 1.5em;
+  text-align: center;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--reader-border-color);
+}
+
+/* ===== 正文区域 ===== */
+.reader-content {
+  max-width: var(--reader-content-width);
+  margin: 0 auto;
+  padding: 40px 20px;
+}
+
+.reader-title {
+  font-size: 2em;
+  margin: 0 0 0.5em 0;
+  line-height: 1.3;
+}
+
+.reader-meta {
+  color: var(--reader-meta-color);
+  font-size: 0.9em;
+  margin-bottom: 2em;
+}
+
+.reader-body {
+  margin-top: 2em;
+}
+
+/* ===== 正文标题 ===== */
+.reader-body h2 {
+  font-size: 1.5em;
+  margin: 1.5em 0 0.5em;
+}
+
+.reader-body h3 {
+  font-size: 1.3em;
+  margin: 1.3em 0 0.4em;
+}
+
+.reader-body h4 {
+  font-size: 1.1em;
+  margin: 1.2em 0 0.4em;
+}
+
+.reader-body h5,
+.reader-body h6 {
+  font-size: 1em;
+  margin: 1em 0 0.3em;
+}
+
+/* ===== 图片 ===== */
+.reader-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+.reader-body figure {
+  margin: 1.5em 0;
+}
+
+.reader-body figcaption {
+  color: var(--reader-meta-color);
+  font-size: 0.85em;
+  text-align: center;
+  margin-top: 0.5em;
+}
+
+/* ===== 链接 ===== */
+.reader-body a {
+  color: var(--reader-link-color);
+  text-decoration: underline;
+}
+
+/* ===== 代码 ===== */
+.reader-body code {
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  background: var(--reader-code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.reader-body pre {
+  background: var(--reader-code-bg);
+  padding: 16px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.reader-body pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+
+/* ===== 引用 ===== */
+.reader-body blockquote {
+  border-left: 3px solid var(--reader-border-color);
+  margin: 1em 0;
+  margin-left: 0;
+  padding-left: 1.5em;
+  color: var(--reader-meta-color);
+}
+
+/* ===== 列表 ===== */
+.reader-body ul,
+.reader-body ol {
+  padding-left: 2em;
+  margin: 1em 0;
+}
+
+.reader-body li {
+  margin: 0.3em 0;
+}
+
+.reader-body dl {
+  margin: 1em 0;
+}
+
+.reader-body dt {
+  font-weight: bold;
+  margin-top: 0.5em;
+}
+
+.reader-body dd {
+  margin-left: 2em;
+  margin-bottom: 0.5em;
+}
+
+/* ===== 表格 ===== */
+.reader-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+
+.reader-body th,
+.reader-body td {
+  border: 1px solid var(--reader-border-color);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.reader-body th {
+  background: var(--reader-code-bg);
+  font-weight: bold;
+}
+
+.reader-body tr:nth-child(even) {
+  background: var(--reader-code-bg);
+}
+
+/* ===== 分隔线 ===== */
+.reader-body hr {
+  border: none;
+  border-top: 1px solid var(--reader-border-color);
+  margin: 2em 0;
+}
+
+/* ===== details/summary ===== */
+.reader-body details {
+  margin: 1em 0;
+  border: 1px solid var(--reader-border-color);
+  border-radius: 4px;
+  padding: 0.5em 1em;
+}
+
+.reader-body summary {
+  cursor: pointer;
+  font-weight: bold;
+}
+
+/* ===== 图片隐藏 ===== */
+#reader-view-container.hide-images .reader-body img {
+  display: none;
+}
+
+/* ===== 通知 ===== */
+.reader-notification {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--reader-text-color);
+  color: var(--reader-bg-color);
+  padding: 8px 20px;
+  border-radius: 4px;
+  font-size: 14px;
+  z-index: 20;
+  opacity: 0.9;
+}

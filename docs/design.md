@@ -11,9 +11,11 @@
 - [3. 设计决策](#3-设计决策)
   - [3.1 内容提取：为什么选 Defuddle 而非 Mozilla Readability](#31-内容提取为什么选-defuddle-而非-mozilla-readability)
   - [3.2 实现语言：为什么选 TypeScript 而非 JavaScript](#32-实现语言为什么选-typescript-而非-javascript)
-  - [3.3 阅读视图渲染：为什么选 Content Script 注入而非新标签页](#33-阅读视图渲染为什么选-content-script-注入而非新标签页)
+  - [3.3 阅读视图渲染：为什么选 Shadow DOM 而非直接操作 DOM](#33-阅读视图渲染为什么选-shadow-dom-而非直接操作-dom)
   - [3.4 样式方案：为什么选 CSS 变量而非 CSS-in-JS](#34-样式方案为什么选-css-变量而非-css-in-js)
-  - [3.5 构建工具：为什么选 Webpack 而非 Vite](#35-构建工具为什么选-webpack-而非-vite)
+  - [3.5 构建工具：为什么选 Vite 而非 Webpack](#35-构建工具为什么选-vite-而非-webpack)
+  - [3.6 注入方式：为什么选按需注入而非预注入](#36-注入方式为什么选按需注入而非预注入)
+  - [3.7 安全：为什么需要 DOMPurify](#37-安全为什么需要-dompurify)
 - [4. 架构设计](#4-架构设计)
   - [4.1 核心分层](#41-核心分层)
   - [4.2 消息通信](#42-消息通信)
@@ -22,9 +24,8 @@
   - [5.1 Manifest（扩展配置）](#51-manifest扩展配置)
   - [5.2 Background Service Worker](#52-background-service-worker)
   - [5.3 Content Script（内容脚本）](#53-content-script内容脚本)
-  - [5.4 Popup（弹出面板）](#54-popup弹出面板)
-  - [5.5 Reader View（阅读视图）](#55-reader-view阅读视图)
-  - [5.6 Defuddle 集成](#56-defuddle-集成)
+  - [5.4 Reader View（阅读视图）](#54-reader-view阅读视图)
+  - [5.5 Defuddle 集成](#55-defuddle-集成)
 - [6. 用户体验流程](#6-用户体验流程)
   - [6.1 安装](#61-安装)
   - [6.2 开启阅读模式](#62-开启阅读模式)
@@ -88,7 +89,7 @@
 
 ## 2. 总体设计
 
-核心思路：**Content Script 注入 + Defuddle 内容提取 + CSS 变量主题系统**。
+核心思路：**按需注入 Content Script + Defuddle 内容提取 + Shadow DOM 隔离渲染 + CSS 变量主题系统**。
 
 ```
 +----------------------------------------------------------------------+
@@ -97,48 +98,49 @@
 |                                                                      |
 |  +----------------------------------------------------------------+  |
 |  |  Browser UI                                                    |  |
-|  |  +------------------+     +------------------+                 |  |
-|  |  |  Extension Icon  |     |  Popup Panel     |                 |  |
-|  |  |  (Toolbar)       |     |  • 主题切换      |                 |  |
-|  |  |  • 点击切换      |     |  • 字体设置      |                 |  |
-|  |  |  • 状态指示      |     |  • 导出选项      |                 |  |
-|  |  +--------+---------+     +--------+---------+                 |  |
-|  |           |                        |                            |  |
-|  +-----------|------------------------|----------------------------+  |
-|              |                        |                              |
-|              v                        v                              |
+|  |  +------------------+                                          |  |
+|  |  |  Extension Icon  |                                          |  |
+|  |  |  (Toolbar)       |                                          |  |
+|  |  |  • 点击切换      |                                          |  |
+|  |  |  • 状态指示      |                                          |  |
+|  |  +--------+---------+                                          |  |
+|  |           |                                                    |  |
+|  +-----------|----------------------------------------------------+  |
+|              |                                                       |
+|              v                                                       |
 |  +----------------------------------------------------------------+  |
 |  |  Background Service Worker                                     |  |
-|  |  • 管理扩展状态                                                 |  |
 |  |  • 处理图标点击                                                 |  |
-|  |  • 协调 Content Script                                         |  |
+|  |  • 按需注入 Content Script                                     |  |
+|  |  • 更新图标状态                                                 |  |
+|  |  • URL 黑名单过滤                                              |  |
 |  +-------------------------------+--------------------------------+  |
 |                                  |                                   |
+|                                  | chrome.scripting.executeScript    |
 |                                  v                                   |
 |  +----------------------------------------------------------------+  |
-|  |  Content Script (注入到目标页面)                               |  |
+|  |  Content Script (按需注入到目标页面)                           |  |
 |  |                                                                |  |
 |  |  +----------------------------------------------------------+  |  |
-|  |  |  Defuddle 内容提取                                        |  |  |
+|  |  |  Defuddle 内容提取 (defuddle/full)                       |  |  |
 |  |  |  • 解析 DOM                                               |  |  |
-|  |  |  • 提取正文内容                                           |  |  |
+|  |  |  • 提取正文内容 (HTML + Markdown)                         |  |  |
 |  |  |  • 提取元数据（标题、作者、日期）                          |  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  |                                                                |  |
 |  |  +----------------------------------------------------------+  |  |
-|  |  |  Reader View 渲染                                         |  |  |
-|  |  |  • 原页面隐藏                                             |  |  |
-|  |  |  • 注入阅读视图 DOM                                       |  |  |
-|  |  |  • 应用主题样式                                           |  |  |
+|  |  |  DOMPurify 内容消毒                                      |  |  |
+|  |  |  • 过滤危险标签和属性                                     |  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  |                                                                |  |
 |  |  +----------------------------------------------------------+  |  |
-|  |  |  工具栏                                                   |  |  |
-|  |  |  • 主题选择器                                             |  |  |
-|  |  |  • 字体大小调节                                           |  |  |
-|  |  |  • 图片显示开关                                           |  |  |
-|  |  |  • 复制 Markdown/HTML                                     |  |  |
-|  |  |  • 退出阅读模式                                           |  |  |
+|  |  |  Shadow DOM Host                                         |  |  |
+|  |  |  +------------------------------------------------------+  |  |
+|  |  |  |  Shadow Root (open)                                  |  |  |
+|  |  |  |  • Reader View 渲染                                  |  |  |
+|  |  |  |  • CSS 样式隔离                                      |  |  |
+|  |  |  |  • 工具栏（主题/字体/导出/退出）                      |  |  |
+|  |  |  +------------------------------------------------------+  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  +----------------------------------------------------------------+  |
 |                                                                      |
@@ -149,10 +151,13 @@
 
 | 决策 | 选择 | 核心理由 | 详见 |
 |------|------|----------|------|
-| 内容提取 | Defuddle（非 Readability） | 元数据丰富、HTML 标准化 | [3.1](#31-内容提取为什么选-defuddle-而非-mozilla-readability) |
+| 内容提取 | Defuddle（非 Readability） | 元数据丰富、内置 Markdown | [3.1](#31-内容提取为什么选-defuddle-而非-mozilla-readability) |
 | 实现语言 | TypeScript | 类型安全、开发体验好 | [3.2](#32-实现语言为什么选-typescript-而非-javascript) |
-| 渲染方式 | Content Script 注入 | 无需新标签页、状态保持 | [3.3](#33-阅读视图渲染为什么选-content-script-注入而非新标签页) |
+| 渲染方式 | Shadow DOM 隔离 | CSS 隔离、不破坏原页面 | [3.3](#33-阅读视图渲染为什么选-shadow-dom-而非直接操作-dom) |
 | 样式方案 | CSS 变量 | 轻量、主题切换简单 | [3.4](#34-样式方案为什么选-css-变量而非-css-in-js) |
+| 构建工具 | Vite | 配置简单、构建快 | [3.5](#35-构建工具为什么选-vite-而非-webpack) |
+| 注入方式 | 按需注入 | 权限最小化、节省资源 | [3.6](#36-注入方式为什么选按需注入而非预注入) |
+| 安全 | DOMPurify | 防止 XSS | [3.7](#37-安全为什么需要-dompurify) |
 
 ---
 
@@ -195,25 +200,26 @@
 2. VS Code 开发体验极佳
 3. Defuddle 本身是 TypeScript
 
-### 3.3 阅读视图渲染：为什么选 Content Script 注入而非新标签页
+### 3.3 阅读视图渲染：为什么选 Shadow DOM 而非直接操作 DOM
 
-| 维度 | Content Script 注入 | 新标签页 |
-|------|---------------------|----------|
-| 用户体验 | 原地切换，感知流畅 | 跳转新标签页，打断感 |
-| 状态保持 | 页面状态保留 | 原页面状态丢失 |
-| URL | 保持原 URL | 显示扩展内部 URL |
-| 实现复杂度 | 中 | 低 |
+| 维度 | Shadow DOM 隔离 | 直接操作 DOM（cloneNode + innerHTML） |
+|------|-----------------|---------------------------------------|
+| CSS 隔离 | 天然隔离，不受原页面样式影响 | 需要手动处理，原页面全局 CSS 可能渗透 |
+| 原页面状态 | 完整保留（DOM、事件监听、JS 状态） | 全部丢失（SPA 页面直接废掉） |
+| 动态元素干扰 | 不受影响，渲染在 shadow 内 | 原页面 JS 动态追加的元素会干扰 |
+| Ctrl+F 搜索 | 正常（Chromium 127+，open mode） | 正常 |
+| 实现复杂度 | 中（样式需通过 `adoptedStyleSheets` 注入） | 低 |
 
-**决策**：选择 Content Script 注入。
+**决策**：选择 Shadow DOM 隔离。
 
 **理由**：
-1. 用户体验更流畅
-2. 可快速在原文和阅读模式间切换
-3. 保持浏览器历史记录一致性
+1. CSS 天然隔离，不需要处理与原页面的样式冲突
+2. 原页面 DOM 完全不动，事件监听和 JS 状态全部保留
+3. 退出阅读模式只需移除 shadow host，干净利落
 
-**代价**：
-1. 需要处理与原页面 CSS 冲突
-2. 需要正确管理 DOM 注入/移除
+**实现方式**：
+- 进入阅读模式：在 `document.body` 上 append 一个 shadow host 元素，通过 `attachShadow({ mode: 'open' })` 创建 shadow root，reader view 渲染在 shadow root 内
+- 退出阅读模式：移除 shadow host 元素即可
 
 ### 3.4 样式方案：为什么选 CSS 变量而非 CSS-in-JS
 
@@ -231,25 +237,48 @@
 2. 包体积极小，性能最优
 3. 原生支持，无运行时开销
 
-### 3.5 构建工具：为什么选 Webpack 而非 Vite
+### 3.5 构建工具：为什么选 Vite 而非 Webpack
 
-| 维度 | Webpack | Vite |
-|------|---------|------|
-| 浏览器扩展支持 | 成熟（很多插件） | 需要额外配置 |
-| 热更新 | 支持（需配置） | 原生支持 |
-| 构建速度 | 较慢 | 极快 |
-| 生态 | 非常丰富 | 较新 |
+| 维度 | Vite | Webpack |
+|------|------|---------|
+| 配置复杂度 | 低（开箱即用 TS 支持） | 高（需手动配 ts-loader、CopyPlugin 等） |
+| 构建速度 | 极快（esbuild 预构建） | 较慢 |
+| 浏览器扩展支持 | `vite-plugin-web-extension` 自动处理 | 需要手动拼 manifest、多入口 |
+| HMR 开发体验 | 原生支持 | 需要额外配置 |
 
-**决策**：选择 Webpack。
+**决策**：选择 Vite。
 
 **理由**：
-1. 浏览器扩展构建场景下 Webpack 生态更成熟
-2. 有现成的扩展构建配置可用
-3. 稳定可靠
+1. 项目轻量（无 Popup，只有 background + content script + CSS），Vite 配置简单匹配度高
+2. 构建速度快，开发体验好
+3. `vite-plugin-web-extension` 已成熟，自动处理扩展构建
 
-**代价**：
-1. 构建速度比 Vite 慢
-2. 配置相对复杂
+### 3.6 注入方式：为什么选按需注入而非预注入
+
+| 维度 | 按需注入 | 预注入（manifest content_scripts） |
+|------|----------|-------------------------------------|
+| 注入方式 | 用户触发时通过 `chrome.scripting.executeScript` 动态注入 | manifest 声明，页面加载时自动注入 |
+| 资源消耗 | 仅在使用时加载 | 每个页面都加载 JS |
+| 权限需求 | `activeTab` + `scripting`，无需 `host_permissions` | 需要 `host_permissions: ["<all_urls>"]` |
+| 用户信任 | 安装时无"读取所有网站数据"警告 | 安装时弹出权限警告 |
+
+**决策**：选择按需注入。
+
+**理由**：
+1. 权限最小化，`activeTab` 只在用户主动点击时授权当前标签页
+2. 不浪费资源，不使用阅读模式的页面不加载任何 JS
+3. 无需 `host_permissions`，安装体验更友好
+
+### 3.7 安全：为什么需要 DOMPurify
+
+Defuddle 提取的 HTML 内容直接渲染到 reader view 中。虽然 Defuddle 会做 HTML 标准化，但不保证完全消毒——原页面中的恶意内容（如 `<img onerror="alert(1)">`）可能残留。Shadow DOM 只隔离样式，不阻止脚本执行。
+
+**决策**：引入 DOMPurify（~15KB minified）。
+
+**理由**：
+1. 在渲染前对 Defuddle 输出的 HTML 进行消毒
+2. 配置白名单保留正文需要的标签，去掉危险属性（`onerror`、`onclick` 等）
+3. 安全相关不应依赖上游库的隐式保证
 
 ---
 
@@ -265,12 +294,8 @@
 |  +----------------------------------------------------------------+  |
 |  |  UI Layer (界面层)                                             |  |
 |  |  +----------------------------------------------------------+  |  |
-|  |  |  Popup                                                   |  |  |
-|  |  |  • 设置面板                                               |  |  |
-|  |  +----------------------------------------------------------+  |  |
-|  |  +----------------------------------------------------------+  |  |
-|  |  |  Toolbar (in Reader View)                                |  |  |
-|  |  |  • 阅读模式内工具栏                                        |  |  |
+|  |  |  Toolbar (in Shadow DOM)                                 |  |  |
+|  |  |  • 主题切换、字体调节、导出、退出                         |  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  +----------------------------------------------------------------+  |
 |                                                                      |
@@ -278,28 +303,31 @@
 |  |  Logic Layer (逻辑层)                                          |  |
 |  |  +----------------------------------------------------------+  |  |
 |  |  |  Background Service Worker                               |  |  |
-|  |  |  • 状态管理                                               |  |  |
-|  |  |  • 消息路由                                               |  |  |
-|  |  |  • 快捷键处理                                             |  |  |
+|  |  |  • 图标点击处理                                           |  |  |
+|  |  |  • 按需注入 Content Script                                |  |  |
+|  |  |  • URL 黑名单过滤                                        |  |  |
+|  |  |  • 图标状态更新                                           |  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  |  |  Content Script Controller                               |  |  |
-|  |  |  • 阅读模式开关                                           |  |  |
+|  |  |  • 阅读模式开关（内部闭环）                               |  |  |
+|  |  |  • Shadow DOM 管理                                       |  |  |
 |  |  |  • 设置应用                                               |  |  |
+|  |  |  • ESC 快捷键监听                                        |  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  +----------------------------------------------------------------+  |
 |                                                                      |
 |  +----------------------------------------------------------------+  |
 |  |  Content Layer (内容层)                                        |  |
 |  |  +----------------------------------------------------------+  |  |
-|  |  |  Defuddle Engine                                         |  |  |
+|  |  |  Defuddle Engine (defuddle/full)                         |  |  |
 |  |  |  • DOM 解析                                               |  |  |
-|  |  |  • 内容提取                                               |  |  |
+|  |  |  • 内容提取 (HTML + Markdown)                             |  |  |
 |  |  |  • 元数据提取                                             |  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  |  +----------------------------------------------------------+  |  |
-|  |  |  Markdown Converter                                      |  |  |
-|  |  |  • HTML → Markdown                                        |  |  |
+|  |  |  DOMPurify                                               |  |  |
+|  |  |  • HTML 内容消毒                                          |  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  +----------------------------------------------------------------+  |
 |                                                                      |
@@ -317,43 +345,58 @@
 
 ```
 +------------------+                    +------------------+
-|  Popup           |                    |  Background      |
-|                  |                    |  Service Worker  |
-|  +------------+  |   chrome.runtime   |  +------------+  |
-|  | 用户操作   |--|------------------>|--|  消息分发   |  |
-|  +------------+  |      .sendMessage  |  +------------+  |
-|                  |                    |        |         |
-+------------------+                    +--------|---------+
+|  Extension Icon  |                    |  Background      |
+|  (用户点击)      |                    |  Service Worker   |
+|                  |  chrome.action     |                  |
+|                  |--onClicked-------->|  1. URL 黑名单   |
+|                  |                    |     过滤         |
++------------------+                    |  2. 按需注入     |
+                                        |     Content Script|
+                                        +--------+---------+
                                                  |
-                                                 | chrome.tabs.sendMessage
+                                                 | chrome.scripting
+                                                 |   .executeScript
                                                  v
                                         +------------------+
                                         |  Content Script  |
                                         |                  |
-                                        |  +------------+  |
-                                        |  | 执行操作   |  |
-                                        |  +------------+  |
+                                        |  • 解析内容      |
+                                        |  • 渲染/移除     |
+                                        |    Shadow DOM    |
+                                        |  • 通知 BG 更新  |
+                                        |    图标状态      |
                                         +------------------+
 ```
+
+消息流说明：
+- **进入阅读模式**：用户点击图标 → Background 检查 URL → 注入 Content Script → Content Script 解析内容、创建 Shadow DOM → 通知 Background 更新图标为激活态
+- **退出阅读模式**：用户点击关闭按钮或按 ESC → Content Script 直接移除 Shadow DOM → 通知 Background 更新图标为默认态
+- **设置变更**：Content Script 内的 toolbar 操作 → 直接修改 Shadow DOM 内样式 + 写入 `chrome.storage.sync`
 
 **消息类型定义：**
 
 ```typescript
-type MessageType = 
-  | 'TOGGLE_READER'
-  | 'GET_STATE'
-  | 'UPDATE_SETTINGS'
-  | 'COPY_CONTENT'
-  | 'GET_CONTENT';
+// Content Script -> Background
+type MessageType =
+  | 'READER_STATE_CHANGED';  // 通知 Background 更新图标状态
 
 interface Message {
   type: MessageType;
-  payload?: any;
+  payload?: {
+    isActive: boolean;
+  };
+}
+
+// Background -> Content Script (通过 chrome.tabs.sendMessage)
+type CommandType =
+  | 'TOGGLE_READER';         // 切换阅读模式
+
+interface Command {
+  type: CommandType;
 }
 
 interface Response {
   success: boolean;
-  data?: any;
   error?: string;
 }
 ```
@@ -390,23 +433,12 @@ interface StorageSchema {
   "permissions": [
     "activeTab",
     "storage",
-    "clipboardWrite"
-  ],
-  "host_permissions": [
-    "<all_urls>"
+    "scripting"
   ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["reader.css"],
-      "run_at": "document_idle"
-    }
-  ],
   "action": {
     "default_icon": {
       "16": "icons/icon-16.png",
@@ -431,60 +463,86 @@ interface StorageSchema {
 }
 ```
 
+与原版的关键差异：
+- 去掉 `host_permissions`（不需要 `<all_urls>`）
+- 去掉 `content_scripts`（改为按需注入）
+- 去掉 `clipboardWrite`（现代浏览器 `navigator.clipboard.writeText` 不需要此权限）
+- 增加 `scripting` 权限（用于 `chrome.scripting.executeScript`）
+- 去掉 `action.default_popup`（无 Popup）
+
 ### 5.2 Background Service Worker
+
+Background 不维护任何状态（无 `Map`），只做事件响应。Service Worker 被浏览器回收后重启不影响功能。
 
 ```typescript
 // background.ts
 
-const READER_VIEW_STATE = new Map<number, boolean>();
+const BLOCKED_URL_PREFIXES = [
+  'chrome://',
+  'chrome-extension://',
+  'about:',
+  'file://',
+  'edge://',
+  'devtools://',
+];
+
+function isBlockedUrl(url: string): boolean {
+  return BLOCKED_URL_PREFIXES.some(prefix => url.startsWith(prefix));
+}
 
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id) return;
-  
-  const isActive = READER_VIEW_STATE.get(tab.id) ?? false;
-  
-  await chrome.tabs.sendMessage(tab.id, {
-    type: 'TOGGLE_READER',
-    payload: { activate: !isActive }
-  });
-  
-  READER_VIEW_STATE.set(tab.id, !isActive);
-  updateIcon(tab.id, !isActive);
+  if (!tab.id || !tab.url) return;
+
+  // URL 黑名单过滤
+  if (isBlockedUrl(tab.url)) return;
+
+  // 尝试向已注入的 content script 发消息
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_READER' });
+  } catch {
+    // content script 未注入，按需注入
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content.js'],
+    });
+    await chrome.scripting.insertCSS({
+      target: { tabId: tab.id },
+      files: ['content.css'],
+    });
+    // 注入后发送切换消息
+    await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_READER' });
+  }
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
-  READER_VIEW_STATE.delete(tabId);
+// 接收 content script 的状态同步消息，更新图标
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message.type === 'READER_STATE_CHANGED' && sender.tab?.id) {
+    updateIcon(sender.tab.id, message.payload.isActive);
+  }
 });
 
 function updateIcon(tabId: number, isActive: boolean) {
   const iconPath = isActive ? 'icons/icon-active-48.png' : 'icons/icon-48.png';
   chrome.action.setIcon({ tabId, path: iconPath });
 }
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'GET_STATE') {
-    const tabId = sender.tab?.id;
-    if (tabId) {
-      sendResponse({ isActive: READER_VIEW_STATE.get(tabId) ?? false });
-    }
-  }
-  return true;
-});
 ```
 
 ### 5.3 Content Script（内容脚本）
 
+Content Script 按需注入，内部管理阅读模式的完整生命周期。退出逻辑在 content script 内部闭环，不依赖 background 转发。
+
 ```typescript
 // content.ts
 
-import Defuddle from 'defuddle';
+import Defuddle from 'defuddle/full';
+import DOMPurify from 'dompurify';
 
-let readerContainer: HTMLElement | null = null;
-let originalContent: HTMLElement | null = null;
+let shadowHost: HTMLElement | null = null;
 
 interface ReaderState {
   isActive: boolean;
   content: string;
+  contentMarkdown: string;
   title: string;
   author?: string;
   published?: string;
@@ -494,215 +552,100 @@ interface ReaderState {
 const state: ReaderState = {
   isActive: false,
   content: '',
-  title: ''
+  contentMarkdown: '',
+  title: '',
 };
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  switch (message.type) {
-    case 'TOGGLE_READER':
-      toggleReader(message.payload.activate);
-      sendResponse({ success: true });
-      break;
-    case 'UPDATE_SETTINGS':
-      applySettings(message.payload);
-      sendResponse({ success: true });
-      break;
-    case 'GET_CONTENT':
-      sendResponse({ 
-        content: state.content, 
-        title: state.title,
-        author: state.author,
-        published: state.published
-      });
-      break;
+// 接收 background 的切换指令
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'TOGGLE_READER') {
+    toggleReader();
+    sendResponse({ success: true });
   }
   return true;
 });
 
-async function toggleReader(activate: boolean) {
-  if (activate) {
-    await enableReader();
-  } else {
+// ESC 退出阅读模式
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && state.isActive) {
     disableReader();
   }
-  state.isActive = activate;
+});
+
+function toggleReader() {
+  if (state.isActive) {
+    disableReader();
+  } else {
+    enableReader();
+  }
 }
 
-async function enableReader() {
+function enableReader() {
   try {
-    const defuddle = new Defuddle(document);
+    const defuddle = new Defuddle(document, { separateMarkdown: true });
     const result = defuddle.parse();
-    
-    state.content = result.content;
+
+    state.content = DOMPurify.sanitize(result.content);
+    state.contentMarkdown = result.contentMarkdown ?? '';
     state.title = result.title;
     state.author = result.author;
     state.published = result.published;
     state.site = result.site;
-    
-    originalContent = document.body.cloneNode(true) as HTMLElement;
-    
-    renderReaderView(result);
+
+    renderReaderView();
+    state.isActive = true;
+    notifyStateChanged(true);
   } catch (error) {
     console.error('Reader View: Failed to parse page', error);
   }
 }
 
 function disableReader() {
-  if (originalContent && readerContainer) {
-    document.body.innerHTML = originalContent.innerHTML;
-    readerContainer = null;
+  if (shadowHost) {
+    shadowHost.remove();
+    shadowHost = null;
   }
+  state.isActive = false;
+  notifyStateChanged(false);
 }
 
-function renderReaderView(result: DefuddleResult) {
-  readerContainer = createReaderContainer(result);
-  document.body.innerHTML = '';
-  document.body.appendChild(readerContainer);
-}
-```
+function renderReaderView() {
+  // 创建 Shadow DOM host
+  shadowHost = document.createElement('reader-view-host');
+  shadowHost.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 2147483647;
+  `;
 
-### 5.4 Popup（弹出面板）
+  const shadowRoot = shadowHost.attachShadow({ mode: 'open' });
 
-```html
-<!-- popup.html -->
-<!DOCTYPE html>
-<html>
-<head>
-  <link rel="stylesheet" href="popup.css">
-</head>
-<body>
-  <div class="popup-container">
-    <header>
-      <h1>Reader View</h1>
-    </header>
-    
-    <section class="settings">
-      <div class="setting-group">
-        <label>主题</label>
-        <div class="theme-buttons">
-          <button data-theme="light" class="theme-btn">亮色</button>
-          <button data-theme="dark" class="theme-btn">暗色</button>
-          <button data-theme="sepia" class="theme-btn">护眼</button>
-        </div>
-      </div>
-      
-      <div class="setting-group">
-        <label>字体大小</label>
-        <input type="range" id="font-size" min="14" max="24" value="18">
-        <span id="font-size-value">18px</span>
-      </div>
-      
-      <div class="setting-group">
-        <label>字体样式</label>
-        <select id="font-family">
-          <option value="serif">衬线</option>
-          <option value="sans-serif">无衬线</option>
-          <option value="monospace">等宽</option>
-        </select>
-      </div>
-      
-      <div class="setting-group">
-        <label>显示图片</label>
-        <input type="checkbox" id="show-images" checked>
-      </div>
-    </section>
-    
-    <footer>
-      <button id="copy-markdown">复制 Markdown</button>
-      <button id="copy-html">复制 HTML</button>
-    </footer>
-  </div>
-  <script src="popup.js"></script>
-</body>
-</html>
-```
+  // 通过 adoptedStyleSheets 注入样式（或 <style> 标签）
+  const container = createReaderContainer(state);
+  shadowRoot.appendChild(container);
 
-```typescript
-// popup.ts
-
-import TurndownService from 'turndown';
-
-document.addEventListener('DOMContentLoaded', async () => {
-  await loadSettings();
-  setupEventListeners();
-});
-
-async function loadSettings() {
-  const { settings } = await chrome.storage.sync.get('settings');
-  if (settings) {
-    applySettingsToUI(settings);
-  }
+  document.body.appendChild(shadowHost);
 }
 
-function setupEventListeners() {
-  // Theme buttons
-  document.querySelectorAll('.theme-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const theme = btn.getAttribute('data-theme');
-      updateSetting('theme', theme);
-    });
-  });
-  
-  // Font size slider
-  const fontSizeSlider = document.getElementById('font-size') as HTMLInputElement;
-  fontSizeSlider.addEventListener('input', () => {
-    updateSetting('fontSize', parseInt(fontSizeSlider.value));
-  });
-  
-  // Copy buttons
-  document.getElementById('copy-markdown')?.addEventListener('click', copyMarkdown);
-  document.getElementById('copy-html')?.addEventListener('click', copyHTML);
-}
-
-async function copyMarkdown() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id) return;
-  
-  const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CONTENT' });
-  if (response.content) {
-    const turndown = new TurndownService();
-    const markdown = turndown.turndown(response.content);
-    await navigator.clipboard.writeText(markdown);
-    showNotification('Markdown 已复制');
-  }
-}
-
-async function copyHTML() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id) return;
-  
-  const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CONTENT' });
-  if (response.content) {
-    await navigator.clipboard.writeText(response.content);
-    showNotification('HTML 已复制');
-  }
-}
-
-function updateSetting(key: string, value: any) {
-  chrome.storage.sync.get('settings', (data) => {
-    const settings = { ...data.settings, [key]: value };
-    chrome.storage.sync.set({ settings });
-    
-    // Notify content script
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(tabs[0].id, {
-          type: 'UPDATE_SETTINGS',
-          payload: settings
-        });
-      }
-    });
+function notifyStateChanged(isActive: boolean) {
+  chrome.runtime.sendMessage({
+    type: 'READER_STATE_CHANGED',
+    payload: { isActive },
   });
 }
 ```
 
-### 5.5 Reader View（阅读视图）
+### 5.4 Reader View（阅读视图）
+
+所有设置和导出功能集中在阅读模式内的 toolbar，无独立 Popup。
 
 ```typescript
 // reader.ts
 
+import DOMPurify from 'dompurify';
+
 interface ReaderViewOptions {
-  content: string;
+  content: string;           // 已经过 DOMPurify 消毒的 HTML
+  contentMarkdown: string;   // Defuddle 内置 Markdown 输出
   title: string;
   author?: string;
   published?: string;
@@ -712,7 +655,7 @@ interface ReaderViewOptions {
 export function createReaderContainer(options: ReaderViewOptions): HTMLElement {
   const container = document.createElement('div');
   container.id = 'reader-view-container';
-  
+
   container.innerHTML = `
     <header class="reader-header">
       <div class="toolbar">
@@ -731,7 +674,7 @@ export function createReaderContainer(options: ReaderViewOptions): HTMLElement {
         <button id="copy-html" title="复制 HTML">HTML</button>
       </div>
     </header>
-    
+
     <article class="reader-content">
       <h1 class="reader-title">${escapeHtml(options.title)}</h1>
       <div class="reader-meta">
@@ -742,85 +685,75 @@ export function createReaderContainer(options: ReaderViewOptions): HTMLElement {
       <div class="reader-body">${options.content}</div>
     </article>
   `;
-  
-  setupToolbarListeners(container);
+
+  setupToolbarListeners(container, options);
   loadAndApplySettings(container);
-  
+
   return container;
 }
 
-function setupToolbarListeners(container: HTMLElement) {
+function setupToolbarListeners(container: HTMLElement, options: ReaderViewOptions) {
+  // 退出按钮 —— 直接在 content script 内部闭环
   container.querySelector('#close-reader')?.addEventListener('click', () => {
-    chrome.runtime.sendMessage({ type: 'TOGGLE_READER', payload: { activate: false } });
+    // 由 content.ts 的 disableReader() 处理
+    document.dispatchEvent(new CustomEvent('reader-view-close'));
   });
-  
+
   container.querySelector('#theme-select')?.addEventListener('change', (e) => {
     const theme = (e.target as HTMLSelectElement).value;
-    applyTheme(theme);
+    applyTheme(container, theme);
     saveSettings({ theme });
   });
-  
+
   container.querySelector('#decrease-font')?.addEventListener('click', () => {
-    adjustFontSize(-2);
+    adjustFontSize(container, -2);
   });
-  
+
   container.querySelector('#increase-font')?.addEventListener('click', () => {
-    adjustFontSize(2);
+    adjustFontSize(container, 2);
   });
-  
+
   container.querySelector('#toggle-images')?.addEventListener('click', () => {
-    toggleImages();
+    toggleImages(container);
   });
-  
-  container.querySelector('#copy-md')?.addEventListener('click', copyMarkdown);
-  container.querySelector('#copy-html')?.addEventListener('click', copyHTML);
+
+  // 复制 Markdown —— 直接使用 Defuddle 内置输出
+  container.querySelector('#copy-md')?.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(options.contentMarkdown);
+    showNotification(container, 'Markdown 已复制');
+  });
+
+  // 复制 HTML
+  container.querySelector('#copy-html')?.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(options.content);
+    showNotification(container, 'HTML 已复制');
+  });
 }
 
-function applyTheme(theme: string) {
-  document.documentElement.setAttribute('data-theme', theme);
+function applyTheme(container: HTMLElement, theme: string) {
+  container.setAttribute('data-theme', theme);
 }
 ```
 
-### 5.6 Defuddle 集成
+### 5.5 Defuddle 集成
 
-Defuddle 需要打包进 content script。由于 Defuddle 是 ESM 模块，需要通过 Webpack 打包。
+使用 `defuddle/full` bundle（包含 Markdown 支持），通过 Vite 打包进 content script。
 
-```javascript
-// webpack.config.js
-const path = require('path');
-const CopyPlugin = require('copy-webpack-plugin');
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import webExtension from 'vite-plugin-web-extension';
 
-module.exports = {
-  entry: {
-    background: './src/background.ts',
-    content: './src/content.ts',
-    popup: './src/popup.ts',
-  },
-  output: {
-    path: path.resolve(__dirname, 'dist'),
-    filename: '[name].js',
-  },
-  module: {
-    rules: [
-      {
-        test: /\.ts$/,
-        use: 'ts-loader',
-        exclude: /node_modules/,
-      },
-    ],
-  },
-  resolve: {
-    extensions: ['.ts', '.js'],
-  },
+export default defineConfig({
   plugins: [
-    new CopyPlugin({
-      patterns: [
-        { from: 'public', to: '.' },
-        { from: 'src/reader/reader.css', to: 'reader.css' },
-      ],
+    webExtension({
+      manifest: 'public/manifest.json',
     }),
   ],
-};
+  build: {
+    outDir: 'dist',
+  },
+});
 ```
 
 ---
@@ -853,15 +786,30 @@ module.exports = {
           |                                        |
           | 页面加载完成                            v
           |                              +-------------------+
-          +----------------------------->|  Content Script   |
-                                         |  调用 Defuddle    |
-                                         +---------+---------+
+          |                              |  Background       |
+          |                              |  1. URL 黑名单    |
+          |                              |     过滤          |
+          |                              |  2. 按需注入      |
+          |                              |     Content Script|
+          |                              +---------+---------+
+          |                                        |
+          +----------------------------------------+
                                                    |
-                                                   | 提取内容
                                                    v
                                          +-------------------+
-                                         |  渲染阅读视图     |
-                                         |  显示工具栏       |
+                                         |  Content Script   |
+                                         |  1. Defuddle 解析 |
+                                         |  2. DOMPurify     |
+                                         |     消毒          |
+                                         |  3. 创建 Shadow   |
+                                         |     DOM           |
+                                         |  4. 渲染阅读视图  |
+                                         +---------+---------+
+                                                   |
+                                                   v
+                                         +-------------------+
+                                         |  通知 Background  |
+                                         |  更新图标为激活态 |
                                          +-------------------+
 ```
 
@@ -894,12 +842,12 @@ module.exports = {
 
 ## 7. 主题与样式
 
-使用 CSS 变量定义主题：
+使用 CSS 变量定义主题。由于采用 Shadow DOM，所有样式定义在 shadow root 内，天然与原页面隔离，CSS 变量作用域限定在 `#reader-view-container` 上。
 
 ```css
-/* reader.css */
+/* reader.css — 注入到 Shadow DOM 内 */
 
-:root {
+#reader-view-container {
   --reader-font-size: 18px;
   --reader-line-height: 1.8;
   --reader-content-width: 700px;
@@ -907,8 +855,8 @@ module.exports = {
 }
 
 /* Light Theme (Default) */
-:root,
-[data-theme="light"] {
+#reader-view-container,
+#reader-view-container[data-theme="light"] {
   --reader-bg-color: #ffffff;
   --reader-text-color: #1a1a1a;
   --reader-meta-color: #666666;
@@ -916,7 +864,7 @@ module.exports = {
 }
 
 /* Dark Theme */
-[data-theme="dark"] {
+#reader-view-container[data-theme="dark"] {
   --reader-bg-color: #1a1a1a;
   --reader-text-color: #e0e0e0;
   --reader-meta-color: #999999;
@@ -924,7 +872,7 @@ module.exports = {
 }
 
 /* Sepia Theme */
-[data-theme="sepia"] {
+#reader-view-container[data-theme="sepia"] {
   --reader-bg-color: #f4ecd8;
   --reader-text-color: #5c4b37;
   --reader-meta-color: #8b7355;
@@ -932,18 +880,14 @@ module.exports = {
 }
 
 #reader-view-container {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
   background-color: var(--reader-bg-color);
   color: var(--reader-text-color);
   font-size: var(--reader-font-size);
   line-height: var(--reader-line-height);
   font-family: var(--reader-font-family);
+  width: 100%;
+  height: 100%;
   overflow-y: auto;
-  z-index: 2147483647;
 }
 
 .reader-header {
@@ -1030,16 +974,10 @@ reader-view/
 ├── src/
 │   ├── background.ts           # Service Worker
 │   ├── content.ts              # 内容脚本入口
-│   ├── popup/
-│   │   ├── popup.ts
-│   │   ├── popup.html
-│   │   └── popup.css
 │   ├── reader/
 │   │   ├── reader.ts           # 阅读视图组件
-│   │   └── reader.css          # 阅读视图样式
+│   │   └── reader.css          # 阅读视图样式（注入 Shadow DOM）
 │   ├── lib/
-│   │   ├── defuddle.ts         # Defuddle 封装
-│   │   ├── markdown.ts         # Markdown 转换
 │   │   └── storage.ts          # 存储封装
 │   └── types/
 │       └── index.ts            # 类型定义
@@ -1053,7 +991,7 @@ reader-view/
 ├── dist/                       # 构建输出
 ├── package.json
 ├── tsconfig.json
-├── webpack.config.js
+├── vite.config.ts
 └── README.md
 ```
 
@@ -1061,18 +999,17 @@ reader-view/
 
 | 步骤 | 任务 | 依赖 | 验证方式 |
 |------|------|------|----------|
-| 1 | 项目初始化 + TypeScript + Webpack 配置 | 无 | `npm run build` 成功 |
+| 1 | 项目初始化 + TypeScript + Vite 配置 | 无 | `npm run build` 成功 |
 | 2 | manifest.json + 基础目录结构 | 步骤 1 | 扩展可加载到浏览器 |
-| 3 | Background Service Worker | 步骤 2 | 点击图标可触发消息 |
-| 4 | Content Script + Defuddle 集成 | 步骤 3 | 可解析页面内容 |
-| 5 | Reader View 渲染 | 步骤 4 | 可显示阅读视图 |
-| 6 | CSS 主题系统 | 步骤 5 | 主题切换正常 |
+| 3 | Background Service Worker（图标点击 + URL 过滤 + 按需注入） | 步骤 2 | 点击图标可注入脚本 |
+| 4 | Content Script + Defuddle 集成 + DOMPurify 消毒 | 步骤 3 | 可解析页面内容 |
+| 5 | Shadow DOM + Reader View 渲染 | 步骤 4 | 可显示阅读视图，原页面状态保留 |
+| 6 | CSS 主题系统（Shadow DOM 内） | 步骤 5 | 主题切换正常 |
 | 7 | 存储层实现 | 步骤 5 | 设置可持久化 |
-| 8 | Popup 设置面板 | 步骤 7 | 设置面板可用 |
-| 9 | Markdown/HTML 复制 | 步骤 4 | 复制功能正常 |
-| 10 | 快捷键支持 | 步骤 5 | Alt+R 可用 |
-| 11 | 图标状态指示 | 步骤 5 | 激活时图标变化 |
-| 12 | 完整测试 + Bug 修复 | 步骤 1-11 | 所有功能正常 |
+| 8 | Toolbar 设置功能（字体、图片开关等） | 步骤 7 | 设置面板可用 |
+| 9 | Markdown/HTML 复制（Defuddle 内置 Markdown） | 步骤 4 | 复制功能正常 |
+| 10 | ESC 退出 + 图标状态指示 | 步骤 5 | ESC/Alt+R 可用，图标状态正确 |
+| 11 | 完整测试 + Bug 修复 | 步骤 1-10 | 所有功能正常 |
 
 ### 8.3 测试要点
 
@@ -1080,16 +1017,22 @@ reader-view/
 |--------|----------|----------|
 | 基础解析 | 在新闻网站点击图标 | 正确提取正文 |
 | 复杂页面 | 在 Medium、知乎等测试 | 内容提取准确 |
+| Shadow DOM 隔离 | 在 CSS 复杂的页面测试 | 阅读视图样式不受原页面影响 |
+| 原页面状态保留 | 在 SPA 页面（如 React 应用）退出阅读模式 | 原页面功能正常，事件监听未丢失 |
 | 主题切换 | 切换三种主题 | 样式正确应用 |
 | 字体调整 | 调整字体大小 | 实时生效 |
 | 图片开关 | 切换图片显示 | 图片正确显示/隐藏 |
-| 复制 Markdown | 点击 MD 按钮 | 剪贴板内容正确 |
-| 复制 HTML | 点击 HTML 按钮 | 剪贴板内容正确 |
+| 复制 Markdown | 点击 MD 按钮 | 剪贴板内容正确（Defuddle 内置输出） |
+| 复制 HTML | 点击 HTML 按钮 | 剪贴板内容正确（经 DOMPurify 消毒） |
+| XSS 防护 | 构造含 `onerror` 等属性的页面 | 恶意属性被 DOMPurify 过滤 |
 | 设置持久化 | 重启浏览器 | 设置保持 |
 | 快捷键 | 按 Alt+R | 阅读模式切换 |
 | ESC 退出 | 阅读模式内按 ESC | 退出阅读模式 |
+| URL 黑名单 | 在 chrome://、about:blank 等页面点击图标 | 不注入，无报错 |
+| 按需注入 | 首次点击图标 | Content Script 正确注入并执行 |
 | 页面导航 | 阅读模式内点击链接 | 新页面正常加载 |
 | 多标签页 | 在多个标签页使用 | 状态独立正确 |
+| Ctrl+F 搜索 | 阅读模式内使用浏览器搜索 | 可搜索到阅读视图内容 |
 
 ---
 
@@ -1101,8 +1044,8 @@ reader-view/
 // package.json scripts
 {
   "scripts": {
-    "build": "webpack --mode production",
-    "dev": "webpack --mode development --watch",
+    "build": "vite build",
+    "dev": "vite build --watch",
     "package": "npm run build && zip -r reader-view.zip dist/"
   }
 }
@@ -1131,12 +1074,14 @@ reader-view/
 1. [Defuddle - Extract the main content from web pages](https://github.com/kepano/defuddle)
 2. [Chrome Extension Manifest V3](https://developer.chrome.com/docs/extensions/mv3/)
 3. [Mozilla Readability](https://github.com/mozilla/readability)
-4. [Turndown - HTML to Markdown converter](https://github.com/mixmark-io/turndown)
+4. [DOMPurify - DOM-only XSS sanitizer](https://github.com/cure53/DOMPurify)
+5. [vite-plugin-web-extension](https://github.com/nicedoc/vite-plugin-web-extension)
 
 ---
 
-**文档版本**: 1.0
+**文档版本**: 1.1
 **更新日期**: 2026-02-21
 
 **修订记录**：
 - v1.0: 初始版本 — 完成背景与目标、总体设计、设计决策、架构设计、组件设计、用户体验流程、主题样式、实现规划、发布与分发等章节
+- v1.1: Review 修订 — 按需注入替代预注入、Shadow DOM 隔离替代 cloneNode、去掉 Popup 集中到 toolbar、Vite 替代 Webpack、DOMPurify 消毒、Defuddle/full 内置 Markdown 替代 Turndown、Background 去状态化、URL 黑名单过滤、ESC 退出支持（详见 `docs/v1.0-review.md`）
