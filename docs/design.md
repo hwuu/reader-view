@@ -1132,3 +1132,11 @@ reader-view/
 2. [Chrome Extension Manifest V3](https://developer.chrome.com/docs/extensions/mv3/)
 3. [Mozilla Readability](https://github.com/mozilla/readability)
 4. [Turndown - HTML to Markdown converter](https://github.com/mixmark-io/turndown)
+
+---
+
+**文档版本**: 1.0
+**更新日期**: 2026-02-21
+
+**修订记录**：
+- v1.0: 初始版本 — 完成背景与目标、总体设计、设计决策、架构设计、组件设计、用户体验流程、主题样式、实现规划、发布与分发等章节
