@@ -37,11 +37,11 @@
   - [8.2 实现步骤](#82-实现步骤)
   - [8.3 测试要点](#83-测试要点)
 - [9. 发布与分发](#9-发布与分发)
-- [参考文献](#参考文献)
 - [10. 测试指南](#10-测试指南)
   - [10.1 测试网站](#101-测试网站)
   - [10.2 测试清单](#102-测试清单)
   - [10.3 已知限制](#103-已知限制)
+- [参考文献](#参考文献)
 
 ---
 
@@ -212,7 +212,7 @@
 | 原页面状态 | 完整保留（DOM、事件监听、JS 状态） | 全部丢失（SPA 页面直接废掉） |
 | 动态元素干扰 | 不受影响，渲染在 shadow 内 | 原页面 JS 动态追加的元素会干扰 |
 | Ctrl+F 搜索 | 正常（Chromium 127+，open mode） | 正常 |
-| 实现复杂度 | 中（样式需通过 `adoptedStyleSheets` 注入） | 低 |
+| 实现复杂度 | 中（样式需通过 `<style>` 标签注入） | 低 |
 
 **决策**：选择 Shadow DOM 隔离。
 
@@ -992,7 +992,7 @@ export default defineConfig({
 }
 
 .reader-body a {
-  color: inherit;
+  color: var(--reader-link-color);
   text-decoration: underline;
 }
 
@@ -1125,16 +1125,6 @@ reader-view/
 
 ---
 
-## 参考文献
-
-- [Defuddle - Extract the main content from web pages](https://github.com/kepano/defuddle)
-- [Chrome Extension Manifest V3](https://developer.chrome.com/docs/extensions/mv3/)
-- [Mozilla Readability](https://github.com/mozilla/readability)
-- [DOMPurify - DOM-only XSS sanitizer](https://github.com/cure53/DOMPurify)
-- [vite-plugin-web-extension](https://github.com/nicedoc/vite-plugin-web-extension)
-
----
-
 ## 10. 测试指南
 
 ### 10.1 测试网站
@@ -1192,6 +1182,16 @@ reader-view/
 | 错误提示 | 解析失败或空内容时仅 console 输出，用户无可见反馈 | 后续版本添加 toast 提示 |
 | 无障碍 | v1.0 未添加 ARIA 标签和屏幕阅读器支持 | 后续版本补充 |
 | 自动化测试 | v1.0 仅手动测试，无单元测试或 E2E 测试 | 后续版本引入 Vitest + Chrome Extension Testing |
+
+---
+
+## 参考文献
+
+- [Defuddle - Extract the main content from web pages](https://github.com/kepano/defuddle)
+- [Chrome Extension Manifest V3](https://developer.chrome.com/docs/extensions/mv3/)
+- [Mozilla Readability](https://github.com/mozilla/readability)
+- [DOMPurify - DOM-only XSS sanitizer](https://github.com/cure53/DOMPurify)
+- [vite-plugin-web-extension](https://github.com/nicedoc/vite-plugin-web-extension)
 
 ---
 
