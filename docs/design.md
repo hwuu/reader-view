@@ -553,6 +553,7 @@ import readerCSS from './reader/reader.css?inline';
 
 let isActive = false;
 let shadowHost: HTMLElement | null = null;
+let originalOverflow = '';
 
 // 解析结果缓存
 let parsedContent = '';
@@ -620,6 +621,7 @@ async function enableReader() {
     }
 
     await renderReaderView();
+    originalOverflow = document.documentElement.style.overflow;
     document.documentElement.style.overflow = 'hidden';
     isActive = true;
     notifyStateChanged(true);
@@ -633,7 +635,14 @@ function disableReader() {
     shadowHost.remove();
     shadowHost = null;
   }
-  document.documentElement.style.overflow = '';
+  document.documentElement.style.overflow = originalOverflow;
+  originalOverflow = '';
+  parsedContent = '';
+  parsedMarkdown = '';
+  parsedTitle = '';
+  parsedAuthor = undefined;
+  parsedPublished = undefined;
+  parsedSite = undefined;
   isActive = false;
   notifyStateChanged(false);
 }
@@ -697,32 +706,34 @@ export async function createReaderContainer(options: ReaderViewOptions): Promise
   const container = document.createElement('div');
   container.id = 'reader-view-container';
 
+  const metaParts: string[] = [];
+  if (options.author) metaParts.push(`<span class="author">${escapeHtml(options.author)}</span>`);
+  if (options.site) metaParts.push(`<span class="site">${escapeHtml(options.site)}</span>`);
+  if (options.published) metaParts.push(`<span class="date">${escapeHtml(options.published)}</span>`);
+
   container.innerHTML = `
     <header class="reader-header">
       <div class="toolbar">
-        <button id="close-reader" title="退出阅读模式">✕</button>
+        <button id="close-reader" class="toolbar-btn" title="退出阅读模式">✕</button>
         <div class="toolbar-divider"></div>
-        <select id="theme-select">
+        <select id="theme-select" class="toolbar-select" title="主题">
           <option value="light">亮色</option>
           <option value="dark">暗色</option>
           <option value="sepia">护眼</option>
         </select>
-        <button id="decrease-font" title="减小字体">A-</button>
-        <button id="increase-font" title="增大字体">A+</button>
-        <button id="toggle-images" title="切换图片">图片</button>
+        <button id="decrease-font" class="toolbar-btn" title="减小字体">A-</button>
+        <span id="font-size-label" class="toolbar-label"></span>
+        <button id="increase-font" class="toolbar-btn" title="增大字体">A+</button>
+        <button id="toggle-images" class="toolbar-btn" title="切换图片显示">图片</button>
         <div class="toolbar-divider"></div>
-        <button id="copy-md" title="复制 Markdown">MD</button>
-        <button id="copy-html" title="复制 HTML">HTML</button>
+        <button id="copy-md" class="toolbar-btn" title="复制 Markdown">MD</button>
+        <button id="copy-html" class="toolbar-btn" title="复制 HTML">HTML</button>
       </div>
     </header>
 
     <article class="reader-content">
       <h1 class="reader-title">${escapeHtml(options.title)}</h1>
-      <div class="reader-meta">
-        ${options.author ? `<span class="author">${escapeHtml(options.author)}</span>` : ''}
-        ${options.site ? `<span class="site">${escapeHtml(options.site)}</span>` : ''}
-        ${options.published ? `<span class="date">${escapeHtml(options.published)}</span>` : ''}
-      </div>
+      ${metaParts.length > 0 ? `<div class="reader-meta">${metaParts.join(' · ')}</div>` : ''}
       <div class="reader-body">${options.content}</div>
     </article>
   `;
@@ -749,18 +760,24 @@ function setupToolbarListeners(container: HTMLElement, options: ReaderViewOption
   container.querySelector('#decrease-font')?.addEventListener('click', async () => {
     const newSize = Math.max(14, currentSettings.fontSize - 2);
     container.style.setProperty('--reader-font-size', `${newSize}px`);
+    const label = container.querySelector('#font-size-label');
+    if (label) label.textContent = `${newSize}`;
     currentSettings = await saveSettings({ fontSize: newSize });
   });
 
   container.querySelector('#increase-font')?.addEventListener('click', async () => {
     const newSize = Math.min(24, currentSettings.fontSize + 2);
     container.style.setProperty('--reader-font-size', `${newSize}px`);
+    const label = container.querySelector('#font-size-label');
+    if (label) label.textContent = `${newSize}`;
     currentSettings = await saveSettings({ fontSize: newSize });
   });
 
   container.querySelector('#toggle-images')?.addEventListener('click', async () => {
     const show = !currentSettings.showImages;
     container.classList.toggle('hide-images', !show);
+    const imgBtn = container.querySelector('#toggle-images');
+    if (imgBtn) imgBtn.textContent = show ? '图片' : '无图';
     currentSettings = await saveSettings({ showImages: show });
   });
 
@@ -1199,7 +1216,7 @@ reader-view/
 **更新日期**: 2026-02-24
 
 **修订记录**：
-- v1.3 (2026-02-24): 同步代码示例与实际实现（修正文件路径、CSS 注入方式、async 函数签名、onClose 回调、DOMPurify 白名单、updateIcon 完整路径、vite.config.ts 配置）；补充已知限制；补充设置项 UI 说明；修正目录结构和参考文献格式
+- v1.3 (2026-02-24): 同步代码示例与实际实现（修正文件路径、CSS 注入方式、async 函数签名、onClose 回调、DOMPurify 白名单、updateIcon 完整路径、vite.config.ts 配置、overflow 恢复、缓存清理、toolbar CSS class、font-size-label、metaParts 渲染、toggle-images 视觉反馈）；补充已知限制；补充设置项 UI 说明；修正目录结构和参考文献格式
 - v1.2 (2026-02-24): 添加测试指南章节
 - v1.1 (2026-02-21): Review 修订 — 按需注入替代预注入、Shadow DOM 隔离替代 cloneNode、去掉 Popup 集中到 toolbar、Vite 替代 Webpack、DOMPurify 消毒、Defuddle/full 内置 Markdown 替代 Turndown、Background 去状态化、URL 黑名单过滤、ESC 退出支持（详见 `docs/v1.0-review.md`）
 - v1.0 (2026-02-21): 初始版本 — 完成背景与目标、总体设计、设计决策、架构设计、组件设计、用户体验流程、主题样式、实现规划、发布与分发等章节
