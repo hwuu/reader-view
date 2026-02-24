@@ -1034,7 +1034,6 @@ reader-view/
 │   └── lib/
 │       └── storage.ts          # 存储封装
 ├── public/
-│   ├── manifest.json
 │   └── icons/
 │       ├── icon-16.png
 │       ├── icon-48.png
@@ -1043,6 +1042,7 @@ reader-view/
 │       ├── icon-active-48.png
 │       └── icon-active-128.png
 ├── dist/                       # 构建输出
+├── manifest.json               # 扩展配置（根目录）
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
