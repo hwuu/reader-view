@@ -41,6 +41,7 @@
 - [10. 测试指南](#10-测试指南)
   - [10.1 测试网站](#101-测试网站)
   - [10.2 测试清单](#102-测试清单)
+  - [10.3 已知限制](#103-已知限制)
 
 ---
 
@@ -439,7 +440,7 @@ interface StorageSchema {
     "scripting"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "src/background.js",
     "type": "module"
   },
   "action": {
@@ -506,14 +507,15 @@ chrome.action.onClicked.addListener(async (tab) => {
     // content script 未注入，按需注入
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ['content.js'],
-    });
-    await chrome.scripting.insertCSS({
-      target: { tabId: tab.id },
-      files: ['content.css'],
+      files: ['src/content.js'],
     });
     // 注入后发送切换消息
-    await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_READER' });
+    // content script 在顶层同步注册消息监听器，executeScript 完成后即可接收消息
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_READER' });
+    } catch {
+      console.error('Reader View: Failed to send message after injection');
+    }
   }
 });
 
@@ -525,8 +527,13 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 });
 
 function updateIcon(tabId: number, isActive: boolean) {
-  const iconPath = isActive ? 'icons/icon-active-48.png' : 'icons/icon-48.png';
-  chrome.action.setIcon({ tabId, path: iconPath });
+  const prefix = isActive ? 'icons/icon-active' : 'icons/icon';
+  const path = {
+    16: chrome.runtime.getURL(`${prefix}-16.png`),
+    48: chrome.runtime.getURL(`${prefix}-48.png`),
+    128: chrome.runtime.getURL(`${prefix}-128.png`),
+  };
+  chrome.action.setIcon({ tabId, path }).catch(() => {});
 }
 ```
 
@@ -534,32 +541,44 @@ function updateIcon(tabId: number, isActive: boolean) {
 
 Content Script 按需注入，内部管理阅读模式的完整生命周期。退出逻辑在 content script 内部闭环，不依赖 background 转发。
 
+关键实现细节：消息监听器在模块顶层同步注册，确保 `executeScript` 完成后 background 立即可以发送消息，避免竞态。
+
 ```typescript
 // content.ts
 
 import Defuddle from 'defuddle/full';
 import DOMPurify from 'dompurify';
+import { createReaderContainer } from './reader/reader';
+import readerCSS from './reader/reader.css?inline';
 
+let isActive = false;
 let shadowHost: HTMLElement | null = null;
 
-interface ReaderState {
-  isActive: boolean;
-  content: string;
-  contentMarkdown: string;
-  title: string;
-  author?: string;
-  published?: string;
-  site?: string;
-}
+// 解析结果缓存
+let parsedContent = '';
+let parsedMarkdown = '';
+let parsedTitle = '';
+let parsedAuthor: string | undefined;
+let parsedPublished: string | undefined;
+let parsedSite: string | undefined;
 
-const state: ReaderState = {
-  isActive: false,
-  content: '',
-  contentMarkdown: '',
-  title: '',
+// DOMPurify 白名单配置
+const PURIFY_CONFIG = {
+  ALLOWED_TAGS: [
+    'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
+    'a', 'img', 'figure', 'figcaption',
+    'table', 'thead', 'tbody', 'tr', 'th', 'td',
+    'strong', 'em', 'b', 'i', 'u', 's', 'del',
+    'br', 'hr', 'div', 'span',
+    'sup', 'sub', 'abbr', 'mark',
+    'dl', 'dt', 'dd', 'details', 'summary',
+  ],
+  ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'class', 'id'],
+  ALLOW_DATA_ATTR: false,
 };
 
-// 接收 background 的切换指令
+// 顶层同步注册，避免竞态
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'TOGGLE_READER') {
     toggleReader();
@@ -570,33 +589,39 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 // ESC 退出阅读模式
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && state.isActive) {
+  if (e.key === 'Escape' && isActive) {
     disableReader();
   }
 });
 
 function toggleReader() {
-  if (state.isActive) {
+  if (isActive) {
     disableReader();
   } else {
     enableReader();
   }
 }
 
-function enableReader() {
+async function enableReader() {
   try {
     const defuddle = new Defuddle(document, { separateMarkdown: true });
     const result = defuddle.parse();
 
-    state.content = DOMPurify.sanitize(result.content);
-    state.contentMarkdown = result.contentMarkdown ?? '';
-    state.title = result.title;
-    state.author = result.author;
-    state.published = result.published;
-    state.site = result.site;
+    parsedContent = DOMPurify.sanitize(result.content, PURIFY_CONFIG);
+    parsedMarkdown = result.contentMarkdown ?? '';
+    parsedTitle = result.title;
+    parsedAuthor = result.author ?? undefined;
+    parsedPublished = result.published ?? undefined;
+    parsedSite = result.site ?? undefined;
 
-    renderReaderView();
-    state.isActive = true;
+    if (!parsedContent.trim()) {
+      console.warn('Reader View: No content extracted from page');
+      return;
+    }
+
+    await renderReaderView();
+    document.documentElement.style.overflow = 'hidden';
+    isActive = true;
     notifyStateChanged(true);
   } catch (error) {
     console.error('Reader View: Failed to parse page', error);
@@ -608,22 +633,32 @@ function disableReader() {
     shadowHost.remove();
     shadowHost = null;
   }
-  state.isActive = false;
+  document.documentElement.style.overflow = '';
+  isActive = false;
   notifyStateChanged(false);
 }
 
-function renderReaderView() {
+async function renderReaderView() {
   // 创建 Shadow DOM host
   shadowHost = document.createElement('reader-view-host');
-  shadowHost.style.cssText = `
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    z-index: 2147483647;
-  `;
+  shadowHost.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;';
 
   const shadowRoot = shadowHost.attachShadow({ mode: 'open' });
 
-  // 通过 adoptedStyleSheets 注入样式（或 <style> 标签）
-  const container = createReaderContainer(state);
+  // CSS 通过 Vite 的 ?inline 导入为字符串，注入 <style> 标签到 Shadow DOM
+  const style = document.createElement('style');
+  style.textContent = readerCSS;
+  shadowRoot.appendChild(style);
+
+  const container = await createReaderContainer({
+    content: parsedContent,
+    contentMarkdown: parsedMarkdown,
+    title: parsedTitle,
+    author: parsedAuthor,
+    published: parsedPublished,
+    site: parsedSite,
+    onClose: disableReader,
+  });
   shadowRoot.appendChild(container);
 
   document.body.appendChild(shadowHost);
@@ -639,12 +674,14 @@ function notifyStateChanged(isActive: boolean) {
 
 ### 5.4 Reader View（阅读视图）
 
-所有设置和导出功能集中在阅读模式内的 toolbar，无独立 Popup。
+所有设置和导出功能集中在阅读模式内的 toolbar，无独立 Popup。`createReaderContainer` 是 async 函数，内部加载已保存的设置并应用。
+
+v1.0 暴露的设置项：主题、字体大小、图片开关。`fontFamily`、`lineHeight`、`contentWidth` 已在 Settings 接口中定义并支持持久化，但 v1.0 不暴露 UI 入口，后续版本按需添加。
 
 ```typescript
 // reader.ts
 
-import DOMPurify from 'dompurify';
+import { loadSettings, saveSettings, type Settings } from '../lib/storage';
 
 interface ReaderViewOptions {
   content: string;           // 已经过 DOMPurify 消毒的 HTML
@@ -653,9 +690,10 @@ interface ReaderViewOptions {
   author?: string;
   published?: string;
   site?: string;
+  onClose: () => void;       // 退出回调，由 content.ts 的 disableReader 传入
 }
 
-export function createReaderContainer(options: ReaderViewOptions): HTMLElement {
+export async function createReaderContainer(options: ReaderViewOptions): Promise<HTMLElement> {
   const container = document.createElement('div');
   container.id = 'reader-view-container';
 
@@ -689,52 +727,62 @@ export function createReaderContainer(options: ReaderViewOptions): HTMLElement {
     </article>
   `;
 
-  setupToolbarListeners(container, options);
-  loadAndApplySettings(container);
+  const settings = await loadSettings();
+  applySettings(container, settings);
+  setupToolbarListeners(container, options, settings);
 
   return container;
 }
 
-function setupToolbarListeners(container: HTMLElement, options: ReaderViewOptions) {
-  // 退出按钮 —— 直接在 content script 内部闭环
-  container.querySelector('#close-reader')?.addEventListener('click', () => {
-    // 由 content.ts 的 disableReader() 处理
-    document.dispatchEvent(new CustomEvent('reader-view-close'));
+function setupToolbarListeners(container: HTMLElement, options: ReaderViewOptions, settings: Settings) {
+  let currentSettings = { ...settings };
+
+  // 退出按钮 —— 通过 onClose 回调闭环
+  container.querySelector('#close-reader')?.addEventListener('click', options.onClose);
+
+  container.querySelector('#theme-select')?.addEventListener('change', async (e) => {
+    const theme = (e.target as HTMLSelectElement).value as Settings['theme'];
+    container.setAttribute('data-theme', theme);
+    currentSettings = await saveSettings({ theme });
   });
 
-  container.querySelector('#theme-select')?.addEventListener('change', (e) => {
-    const theme = (e.target as HTMLSelectElement).value;
-    applyTheme(container, theme);
-    saveSettings({ theme });
+  container.querySelector('#decrease-font')?.addEventListener('click', async () => {
+    const newSize = Math.max(14, currentSettings.fontSize - 2);
+    container.style.setProperty('--reader-font-size', `${newSize}px`);
+    currentSettings = await saveSettings({ fontSize: newSize });
   });
 
-  container.querySelector('#decrease-font')?.addEventListener('click', () => {
-    adjustFontSize(container, -2);
+  container.querySelector('#increase-font')?.addEventListener('click', async () => {
+    const newSize = Math.min(24, currentSettings.fontSize + 2);
+    container.style.setProperty('--reader-font-size', `${newSize}px`);
+    currentSettings = await saveSettings({ fontSize: newSize });
   });
 
-  container.querySelector('#increase-font')?.addEventListener('click', () => {
-    adjustFontSize(container, 2);
-  });
-
-  container.querySelector('#toggle-images')?.addEventListener('click', () => {
-    toggleImages(container);
+  container.querySelector('#toggle-images')?.addEventListener('click', async () => {
+    const show = !currentSettings.showImages;
+    container.classList.toggle('hide-images', !show);
+    currentSettings = await saveSettings({ showImages: show });
   });
 
   // 复制 Markdown —— 直接使用 Defuddle 内置输出
   container.querySelector('#copy-md')?.addEventListener('click', async () => {
-    await navigator.clipboard.writeText(options.contentMarkdown);
-    showNotification(container, 'Markdown 已复制');
+    try {
+      await navigator.clipboard.writeText(options.contentMarkdown);
+      showNotification(container, 'Markdown 已复制');
+    } catch {
+      showNotification(container, '复制失败');
+    }
   });
 
   // 复制 HTML
   container.querySelector('#copy-html')?.addEventListener('click', async () => {
-    await navigator.clipboard.writeText(options.content);
-    showNotification(container, 'HTML 已复制');
+    try {
+      await navigator.clipboard.writeText(options.content);
+      showNotification(container, 'HTML 已复制');
+    } catch {
+      showNotification(container, '复制失败');
+    }
   });
-}
-
-function applyTheme(container: HTMLElement, theme: string) {
-  container.setAttribute('data-theme', theme);
 }
 ```
 
@@ -750,11 +798,14 @@ import webExtension from 'vite-plugin-web-extension';
 export default defineConfig({
   plugins: [
     webExtension({
-      manifest: 'public/manifest.json',
+      additionalInputs: ['src/content.ts'],
     }),
   ],
   build: {
     outDir: 'dist',
+  },
+  esbuild: {
+    charset: 'ascii',  // 避免非 ASCII 字符导致 Chrome executeScript 报 UTF-8 编码错误
   },
 });
 ```
@@ -980,17 +1031,17 @@ reader-view/
 │   ├── reader/
 │   │   ├── reader.ts           # 阅读视图组件
 │   │   └── reader.css          # 阅读视图样式（注入 Shadow DOM）
-│   ├── lib/
-│   │   └── storage.ts          # 存储封装
-│   └── types/
-│       └── index.ts            # 类型定义
+│   └── lib/
+│       └── storage.ts          # 存储封装
 ├── public/
 │   ├── manifest.json
 │   └── icons/
 │       ├── icon-16.png
 │       ├── icon-48.png
 │       ├── icon-128.png
-│       └── icon-active-48.png
+│       ├── icon-active-16.png
+│       ├── icon-active-48.png
+│       └── icon-active-128.png
 ├── dist/                       # 构建输出
 ├── package.json
 ├── tsconfig.json
@@ -1043,6 +1094,8 @@ reader-view/
 
 ### 9.1 构建命令
 
+构建产物输出到 `dist/` 目录，可直接加载到浏览器。
+
 ```json
 // package.json scripts
 {
@@ -1074,11 +1127,11 @@ reader-view/
 
 ## 参考文献
 
-1. [Defuddle - Extract the main content from web pages](https://github.com/kepano/defuddle)
-2. [Chrome Extension Manifest V3](https://developer.chrome.com/docs/extensions/mv3/)
-3. [Mozilla Readability](https://github.com/mozilla/readability)
-4. [DOMPurify - DOM-only XSS sanitizer](https://github.com/cure53/DOMPurify)
-5. [vite-plugin-web-extension](https://github.com/nicedoc/vite-plugin-web-extension)
+- [Defuddle - Extract the main content from web pages](https://github.com/kepano/defuddle)
+- [Chrome Extension Manifest V3](https://developer.chrome.com/docs/extensions/mv3/)
+- [Mozilla Readability](https://github.com/mozilla/readability)
+- [DOMPurify - DOM-only XSS sanitizer](https://github.com/cure53/DOMPurify)
+- [vite-plugin-web-extension](https://github.com/nicedoc/vite-plugin-web-extension)
 
 ---
 
@@ -1131,10 +1184,22 @@ reader-view/
 
 ---
 
-**文档版本**: 1.2
+### 10.3 已知限制
+
+| 限制 | 说明 | 计划 |
+|------|------|------|
+| SPA 页面 | 在 SPA 页面导航后点击阅读模式，DOM 可能尚未更新完成，Defuddle 可能提取到不完整内容 | 后续版本考虑 MutationObserver 等待 DOM 稳定 |
+| 错误提示 | 解析失败或空内容时仅 console 输出，用户无可见反馈 | 后续版本添加 toast 提示 |
+| 无障碍 | v1.0 未添加 ARIA 标签和屏幕阅读器支持 | 后续版本补充 |
+| 自动化测试 | v1.0 仅手动测试，无单元测试或 E2E 测试 | 后续版本引入 Vitest + Chrome Extension Testing |
+
+---
+
+**文档版本**: 1.3
 **更新日期**: 2026-02-24
 
 **修订记录**：
-- v1.0: 初始版本 — 完成背景与目标、总体设计、设计决策、架构设计、组件设计、用户体验流程、主题样式、实现规划、发布与分发等章节
-- v1.1: Review 修订 — 按需注入替代预注入、Shadow DOM 隔离替代 cloneNode、去掉 Popup 集中到 toolbar、Vite 替代 Webpack、DOMPurify 消毒、Defuddle/full 内置 Markdown 替代 Turndown、Background 去状态化、URL 黑名单过滤、ESC 退出支持（详见 `docs/v1.0-review.md`）
-- v1.2: 添加测试指南章节
+- v1.3 (2026-02-24): 同步代码示例与实际实现（修正文件路径、CSS 注入方式、async 函数签名、onClose 回调、DOMPurify 白名单、updateIcon 完整路径、vite.config.ts 配置）；补充已知限制；补充设置项 UI 说明；修正目录结构和参考文献格式
+- v1.2 (2026-02-24): 添加测试指南章节
+- v1.1 (2026-02-21): Review 修订 — 按需注入替代预注入、Shadow DOM 隔离替代 cloneNode、去掉 Popup 集中到 toolbar、Vite 替代 Webpack、DOMPurify 消毒、Defuddle/full 内置 Markdown 替代 Turndown、Background 去状态化、URL 黑名单过滤、ESC 退出支持（详见 `docs/v1.0-review.md`）
+- v1.0 (2026-02-21): 初始版本 — 完成背景与目标、总体设计、设计决策、架构设计、组件设计、用户体验流程、主题样式、实现规划、发布与分发等章节
